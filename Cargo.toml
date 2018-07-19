@@ -5,8 +5,10 @@ authors = ["negamartin"]
 
 [dependencies]
 byteorder = "1.2"
+#screenshot is used as an easy way to get screen resolution
 screenshot = "0.0"
 inputbot = "0.4"
 serde = "1.0"
+serde_derive = "1.0"
 ron = "0.3"
 bincode = "1.0"
