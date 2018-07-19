@@ -17,6 +17,8 @@ Follow these steps to connect:
    
    Go to `Settings > Developer Options` and enable USB Debugging.
 2. Plug in your android device to your computer through a USB cable.
+   Unlock your device and allow for USB Debugging to connect, a popup window should
+   appear asking for your approval if you hadn't done it before.
 3. Open the app in your device first.
 4. Run the desktop app in your computer.
    
