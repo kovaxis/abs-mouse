@@ -4,6 +4,10 @@ A rectangle in the 'source' display (the android device) is mapped to a rectangl
 in the 'target' display (the computer screen).
 A configuration file allows for different flexible setups.
 
+Note: For clarity throughout the project the terms `device`, `source` and `server`
+are used interchangeably to represent the side of the connection providing events.
+Similarly the terms `desktop`, `target` and `client` are used to represent the
+side of the connection receiving events.
 
 # Connecting through USB
 
