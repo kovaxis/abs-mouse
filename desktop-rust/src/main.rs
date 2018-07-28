@@ -6,41 +6,72 @@ extern crate ron;
 extern crate bincode;
 #[macro_use]
 extern crate serde_derive;
+extern crate serde;
 
+use prelude::*;
 use std::{
   net::{TcpStream},
-  io::{self,Write,Read,BufRead,BufReader},
+  io::{self,BufRead,BufReader},
   fs::{File},
   cmp::{Ordering},
-  env,mem,
+  env,
   ops::{self,RangeInclusive},
   path::{Path},
 };
 use byteorder::{NetworkEndian,ByteOrder,ReadBytesExt};
 use inputbot::{MouseCursor};
 use rect::*;
+use network::{Remote};
+use absm::{AbsmSession,ServerInfo};
+
+mod prelude {
+  pub use std::error::Error as ErrorTrait;
+  pub type Error = Box<ErrorTrait>;
+  pub type Result<T> = ::std::result::Result<T,Error>;
+  
+  pub use std::{
+    io::{Write,Read},
+    fmt,mem,
+  };
+  pub use serde::{Serialize,Deserialize};
+  pub use network::{Connection,LocalBuffer,NetBuffer};
+  
+  pub enum Never {}
+  impl Never {
+    fn as_never(&self)->! {unsafe{::std::hint::unreachable_unchecked()}}
+  }
+  impl fmt::Display for Never {
+    fn fmt(&self,_: &mut fmt::Formatter)->fmt::Result {self.as_never()}
+  }
+  impl fmt::Debug for Never {
+    fn fmt(&self,_: &mut fmt::Formatter)->fmt::Result {self.as_never()}
+  }
+  impl ErrorTrait for Never {}
+}
 
 #[macro_use]
 mod rect;
+mod network;
+mod absm;
 
-struct Setup {
+pub struct Setup {
   ///Map from input device coordinates to output client coordinates.
-  mapping: Mapping,
+  pub mapping: Mapping,
   ///Specify a minimum and a maximum on the final client coordinates.
-  clip: Rect<i32>,
+  pub clip: Rect<i32>,
   ///Specify a range of pressures.
   ///Events with a pressure outside this range are ignored.
-  pressure: [f32; 2],
+  pub pressure: [f32; 2],
   ///Specify a range of sizes, similarly to `pressure`.
-  size: [f32; 2],
+  pub size: [f32; 2],
 }
 impl Setup {
-  fn new(info: SetupInfo,config: &Config)->Setup {
+  fn new(info: &ServerInfo,config: &Config)->Setup {
     //Target area is set immutably by the config
     let target=config.target;
     //Start off with source area as the entire device screen
     //Source area is more mutable than target area
-    let mut source=Rect{min: Pair([0; 2]),max: info.server_screen_res};
+    let mut source=Rect{min: Pair([0.0; 2]),max: info.server_screen_res};
     println!("device screen area: {}",source);
     
     //Correct any device rotations
@@ -140,46 +171,34 @@ impl Setup {
   }
 }
 
-#[derive(Deserialize,Serialize,Debug)]
-struct SetupInfo {
-  server_screen_res: Pair<i32>,
-}
-impl SetupInfo {
-  fn build(self,config: &Config)->Setup {
-    Setup::new(self,config)
-  }
-}
-
 #[derive(Deserialize,Serialize)]
 #[serde(default)]
-struct Config {
+pub struct Config {
   ///The target area to be mapped, in screen pixels.
-  target: Rect<i32>,
+  pub target: Rect<i32>,
   ///The source area to be mapped, in normalized coordinates from `0.0` to `1.0`.
-  source: Rect<f32>,
+  pub source: Rect<f32>,
   ///After all transformations, clip mouse positions to this rectangle.
-  clip: Rect<i32>,
+  pub clip: Rect<i32>,
   ///If the device screen is rotated, rotate it back to compensate.
-  correct_device_orientation: bool,
+  pub correct_device_orientation: bool,
   ///If after all transformations the source area is rotated, rotate it back to match target
   ///orientation (landscape or portrait).
-  correct_orientation: bool,
+  pub correct_orientation: bool,
   ///If the source area does not have the same aspect ratio as the target area, shrink it a bit
   ///in a single axis to fit.
-  keep_aspect_ratio: bool,
+  pub keep_aspect_ratio: bool,
   ///Only allow touches within this pressure range to go through.
-  pressure_range: [Option<f32>; 2],
+  pub pressure_range: [Option<f32>; 2],
   ///Only allow touches within this size range to go through.
-  size_range: [Option<f32>; 2],
-  ///Connect to this host IP.
-  host: String,
-  ///Connect to this host port.
-  port: u16,
+  pub size_range: [Option<f32>; 2],
+  ///Connect to this remote.
+  pub remote: Remote,
   ///When ADB port forwarding, map this port on the device.
-  android_usb_port: u16,
+  pub android_usb_port: u16,
   ///Whether to attempt to do ADB port forwarding automatically.
   ///The android device needs to have `USB Debugging` enabled.
-  android_attempt_usb_connection: bool,
+  pub android_attempt_usb_connection: bool,
 }
 impl Default for Config {
   fn default()->Config {
@@ -193,8 +212,7 @@ impl Default for Config {
       keep_aspect_ratio: true,
       pressure_range: [None; 2],
       size_range: [None; 2],
-      host: String::from("localhost"),
-      port: 8517,
+      remote: Remote::Tcp("localhost".into(),8517),
       android_usb_port: 8517,
       android_attempt_usb_connection: true,
     }
@@ -240,13 +258,20 @@ fn get_screen_resolution()->Pair<i32> {
   Pair([screenshot.width() as i32,screenshot.height() as i32])
 }
 
-fn try_adb_forward<P: AsRef<Path>>(path: P,config: &Config)->Result<(),()> {
+fn try_adb_forward<P: AsRef<Path>>(path: P,config: &Config)->Result<()> {
   use std::process::{Command};
   
+  let local_port=match config.remote {
+    Remote::Tcp(_,port)=>port,
+    _ => {
+      println!("not connecting through tcp, skipping adb port forwarding");
+      return Ok(())
+    },
+  };
   println!("attempting to adb port forward using executable on '{}'",path.as_ref().display());
   let out=Command::new(path.as_ref())
     .arg("forward")
-    .arg(format!("tcp:{}",config.port))
+    .arg(format!("tcp:{}",local_port))
     .arg(format!("tcp:{}",config.android_usb_port))
     .output();
   match out {
@@ -264,7 +289,7 @@ fn try_adb_forward<P: AsRef<Path>>(path: P,config: &Config)->Result<(),()> {
         println!(" adb error output:");
         lines(&out.stderr);
         println!(" device might be disconnected or usb debugging disabled");
-        Err(())
+        Err("error exit code".into())
       }
     },
     Err(err)=>{
@@ -272,7 +297,7 @@ fn try_adb_forward<P: AsRef<Path>>(path: P,config: &Config)->Result<(),()> {
         " failed to run command: {}",
         err
       );
-      Err(())
+      Err("failed to run command".into())
     },
   }
 }
@@ -290,9 +315,6 @@ fn main() {
   //Load configuration
   let config=Config::load_path(&cfg_path);
   
-  //Setup for the specific device
-  let mut setup: Option<Setup>=None;
-  
   //Try port forwarding using adb
   if config.android_attempt_usb_connection {
     let ok=try_adb_forward(&Path::new(&exec_path).with_file_name("adb"),&config)
@@ -301,7 +323,7 @@ fn main() {
       Ok(())=>println!(
         "opened communication tunnel to android device"
       ),
-      Err(())=>println!(
+      Err(_err)=>println!(
         "failed to open communication to android device, is USB Debugging enabled?"
       ),
     }
@@ -309,6 +331,13 @@ fn main() {
     println!("usb android device connection is disabled");
   }
   
+  let session=AbsmSession::new(config);
+  
+  loop {
+    
+  }
+  
+  /*
   //Create tcp stream to device
   //Tcp is used instead of udp because adb can only forward tcp ports
   println!("connecting to device at {}:{}...",config.host,config.port);
@@ -321,10 +350,10 @@ fn main() {
   let mut bincode_cfg=bincode::config();
   bincode_cfg.big_endian();
   loop {
-    let mut msg_type=[0; 1];
+    let mut msg_type=[0; 4];
     conn.read_exact(&mut msg_type).expect("failed to receive message");
-    match msg_type {
-      [0xDE]=>{
+    match &msg_type {
+      b""=>{
         //Mousemove message
         let mut data=[0; 16];
         conn.read_exact(&mut data).expect("failed to read message data");
@@ -345,4 +374,5 @@ fn main() {
       [ty]=>println!("invalid message type {:x}",ty),
     }
   }
+  */
 }

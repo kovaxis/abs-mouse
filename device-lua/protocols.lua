@@ -1,4 +1,5 @@
 local socket=require "socket";
+local util=require "util";
 
 --A table of protocol initialization functions.
 --Each of this functions receives the `network` object and returns a protocol
@@ -56,7 +57,7 @@ function protocols.tcp(net)
       sock:setoption('tcp-nodelay',true);
       return {
         send=function(data)
-          return sock:send(love.data.pack(">s4",data));
+          return sock:send(string.pack(">s4",data));
         end,
         close=function()
           updates:push{type="kill_remote"};

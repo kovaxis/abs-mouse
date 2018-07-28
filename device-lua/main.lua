@@ -1,4 +1,3 @@
-print("abs-mouse to logcat");
 local util=require "util";
 local socket=require "socket";
 
@@ -9,7 +8,7 @@ local use_function_loop=false;
 --Current settings
 --Completely mutable, might change at any time
 local frame_delay=1/10;
-local tick_delay=1/480;
+local update_delay=1/480;
 local track_mouse="always"; --Either "always", "pressed" or "never"
 
 local width,height;
@@ -104,8 +103,16 @@ local function network_tick()
         remotes[msg.remote_id]={stage="disconnected"};
       elseif msg.type=="kill_remote" then
         remotes[msg.remote_id]=nil;
-      elseif msg.type=="remote_stage" then
-        remotes[msg.remote_id].stage=msg.stage;
+      elseif msg.type=="update_remote" then
+        if msg.key=="stage" then
+          remotes[msg.remote_id].stage=msg.val;
+        elseif msg.key=="frame_delay" then
+          frame_delay=msg.val;
+        elseif msg.key=="update_delay" then
+          update_delay=msg.val;
+        else
+          error("invalid cross-thread remote update '"..tostring(msg.key).."' = '"..tostring(msg.val).."'",0);
+        end
       elseif msg.type=="log" then
         net_log:print(unpack(msg));
       else
@@ -116,7 +123,6 @@ local function network_tick()
     end
   end
 end
-
 function love.threaderror(thread,err)
   --Propagate error to main thread: sub-threads shouldn't error
   error(err,0);
@@ -144,7 +150,7 @@ do
   end
   function set_size(w,h)
     width,height=w,h;
-    network.to_server:push{type="resize",w=w,h=h};
+    network.to_server:push{type="resize",width=w,height=h};
     print("set size to ["..w..", "..h.."]");
   end
 end
@@ -285,7 +291,7 @@ do
         y=y+font_height;
       end
       stat("FPS: "..real_fps.."/"..(1/frame_delay));
-      stat("UPS: "..real_ups.."/"..(1/tick_delay));
+      stat("UPS: "..real_ups.."/"..(1/update_delay));
       local fastest;
       if fastest_touch then
         fastest=math.floor(1/fastest_touch).."Hz";
@@ -323,12 +329,13 @@ end
 
 --Main loop
 function love.run()
+  print("abs-mouse starting up")
   if not width or not height then
-    set_size(love.graphics.getDimensions());
+    set_size(love.graphics.getWidth(),love.graphics.getHeight());
   end
-  print("loaded");
+  print(" loaded");
   local loop_start_time=love.timer.getTime();
-  local next_tick=loop_start_time;
+  local next_update=loop_start_time;
   local next_frame=loop_start_time;
   local awake_since=loop_start_time;
   local prev_post_sleep=loop_start_time;
@@ -342,10 +349,10 @@ function love.run()
     end
     --Update
     timepoint();
-    if now>=next_tick then
+    if now>=next_update then
       local quit=update();
       if quit then return quit; end
-      next_tick=next_tick+tick_delay;
+      next_update=next_update+update_delay;
     end
     --Render
     timepoint();
@@ -355,16 +362,16 @@ function love.run()
     end
     --Sleep
     timepoint();
-    local sleep_for=math.min(next_tick,next_frame)-now;
+    local sleep_for=math.min(next_update,next_frame)-now;
     local update_awake_since;
     if sleep_for>0 then
       --In time, sleep for the required period
       love.timer.sleep(sleep_for);
       update_awake_since=true;
     elseif now-awake_since>0.5 then
-      --Very late, bring `next_tick` up to date
-      next_tick=now;
-      next_frame=now;
+      --Very late, bring `next_update` and `next_frame` up to date
+      next_update=math.max(next_update,now);
+      next_frame=math.max(next_frame,now);
       update_awake_since=true;
       print("can't keep up! skipping some updates");
     else
