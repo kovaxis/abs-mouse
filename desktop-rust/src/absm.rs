@@ -48,10 +48,12 @@ impl AbsmSession {
         ABSM_VERSION.0,ABSM_VERSION.1 , remote_version.0,remote_version.1
       );
       //Everything is ok, now decode server info headers
+      println!("decoding server-info header fields");
       ServerInfo::from_decoder(HeaderDecoder(&buf[8..]))
     });
     
     //Create setup and notify to server
+    println!("building setup");
     let setup=server_info.build(&config);
     println!("sending setup to server");
     NET_BUFFER.borrow(|buf| {
@@ -81,9 +83,11 @@ impl ServerInfo {
     let mut core=CoreFields::default();
     
     for (key,val) in headers {
+      
       match key {
         b"screen_res"=>{
           self.server_screen_res=network::decode_from(val).expect("screen_res header too short");
+          println!("server screen resolution is {}",self.server_screen_res);
           core.screen_res=true;
         },
         _=>{
@@ -121,18 +125,20 @@ pub struct HeaderDecoder<'a>(pub &'a [u8]);
 impl<'a> Iterator for HeaderDecoder<'a> {
   type Item = (&'a [u8],&'a [u8]);
   fn next(&mut self)->Option<Self::Item> {
-    self.0.iter().position(|byte| *byte==1).and_then(|sep| {
-      //Get key and val
-      let key=&self.0[..sep];
-      let val_haystack=&self.0[sep+1..];
-      let val_len=val_haystack.iter().position(|byte| *byte==2).unwrap_or(val_haystack.len());
-      let val=&val_haystack[..val_len];
-      
-      //Advance slice
-      self.0=&self.0[sep+1+val_len+1..];
-      
+    if self.0.len()==0 {
+      None
+    }else{
+      let mut consume=|len| {
+        let slice=self.0.get(..len).expect("malformed header fields");
+        self.0=&self.0[len..];
+        slice
+      };
+      let key_len: u32=network::decode_from(consume(4)).unwrap();
+      let key=consume(key_len as usize);
+      let val_len: u32=network::decode_from(consume(4)).unwrap();
+      let val=consume(val_len as usize);
       Some((key,val))
-    })
+    }
   }
 }
 

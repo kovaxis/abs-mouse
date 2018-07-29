@@ -245,7 +245,7 @@ while true do
     width,height=msg.width,msg.height;
     for remote_id,remote in pairs(remotes) do
       if remote.stage=="connected" then
-        send_server_info(place_screen_res({}));
+        send_server_info(remote,place_screen_res({}));
       end
     end
   elseif msg.type=="kill_remote" then

@@ -18,7 +18,7 @@ pub fn encode_into<T: Serialize,W: Write>(write: W,obj: &T)->Result<()> {
 
 pub fn f32_to_bytes(float: f32)->[u8; 4] {
   let mut bytes=[0; 4];
-  encode_into(&mut bytes[..],&float);
+  encode_into(&mut bytes[..],&float).unwrap();
   bytes
 }
 
