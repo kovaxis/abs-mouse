@@ -39,17 +39,7 @@ impl AbsmSession {
     println!("waiting for server-info reply");
     let server_info=NET_BUFFER.borrow(|buf| {
       conn.recv(&mut *buf).expect("failed to receive server-info");
-      assert!(buf.len()>=8,"server-info message too short");
-      assert!(&buf[0..4]==b"sInf","invalid server-info message");
-      let remote_version: (u16,u16)=network::decode_from(&buf[4..8]).unwrap();
-      assert!(
-        ABSM_VERSION.0==remote_version.0,
-        "abs-m protocol version mismatch: local {}.{} != remote {}.{}",
-        ABSM_VERSION.0,ABSM_VERSION.1 , remote_version.0,remote_version.1
-      );
-      //Everything is ok, now decode server info headers
-      println!("decoding server-info header fields");
-      ServerInfo::from_decoder(HeaderDecoder(&buf[8..]))
+      ServerInfo::from_message(buf)
     });
     
     //Create setup and notify to server
@@ -68,22 +58,87 @@ impl AbsmSession {
     //Create state
     AbsmSession{config,server_info,setup,connection: conn}
   }
+  
+  ///Listen on the connection for events, consuming and returning when one is received.
+  pub fn wait_for_event(&mut self) {
+    NET_BUFFER.borrow(|buf| {
+      //Read message
+      self.connection.recv(&mut *buf).expect("failed to receive message from server");
+      //Parse message
+      self.consume_message(buf);
+    });
+  }
+  
+  ///Parse a single message.
+  pub fn consume_message(&mut self,msg: &mut [u8]) {
+    assert!(msg.len()>4,"invalid abs-m message header");
+    let mut ty=[0; 4];
+    ty.copy_from_slice(&msg[0..4]);
+    match &ty {
+      b"tuch"=>{
+        
+      },
+      b"keyp"=>{
+        
+      },
+      b"sInf"=>{
+        self.server_info.update(msg);
+      },
+      b"ping"=>{
+        msg[0..4].copy_from_slice(b"repl");
+        self.connection.send(msg).expect("failed to send ping reply");
+      },
+      ty=>{
+        println!("unknown message type '{}'",String::from_utf8_lossy(ty));
+      },
+    }
+  }
 }
 
 #[derive(Deserialize,Serialize,Debug)]
 pub struct ServerInfo {
+  pub version: (u16,u16),
   pub server_screen_res: Pair<f32>,
 }
 impl ServerInfo {
-  fn extend_from<'a>(&mut self,headers: HeaderDecoder<'a>,require_core_fields: bool) {
+  fn extend_from<'a>(&mut self,mut buf: &[u8],require_core_fields: bool) {
+    //Check packet header
+    assert!(buf.len()>=8,"server-info message too short");
+    assert!(&buf[0..4]==b"sInf","invalid server-info message");
+    let remote_version: (u16,u16)=network::decode_from(&buf[4..8]).unwrap();
+    assert!(
+      ABSM_VERSION.0==remote_version.0,
+      "abs-m protocol version mismatch: local {}.{} != remote {}.{}",
+      ABSM_VERSION.0,ABSM_VERSION.1 , remote_version.0,remote_version.1
+    );
+    
+    //Core fields __must__ be set if `require_core_fields` is set
     #[derive(Default)]
     struct CoreFields {
       screen_res: bool,
     }
     let mut core=CoreFields::default();
     
-    for (key,val) in headers {
+    //Search for headers
+    loop {
+      //Get the next header
+      let key;
+      let val;
+      if buf.len()==0 {
+        break;
+      }else{
+        let mut consume=|len| {
+          let slice=buf.get(..len).expect("malformed header fields");
+          buf=&buf[len..];
+          slice
+        };
+        let key_len: u32=network::decode_from(consume(4)).unwrap();
+        key=consume(key_len as usize);
+        let val_len: u32=network::decode_from(consume(4)).unwrap();
+        val=consume(val_len as usize);
+      }
       
+      //Process key/value pair
       match key {
         b"screen_res"=>{
           self.server_screen_res=network::decode_from(val).expect("screen_res header too short");
@@ -99,6 +154,8 @@ impl ServerInfo {
         },
       }
     }
+    
+    //Check if core field requirements are met
     if require_core_fields {
       assert!(
         core.screen_res,
@@ -107,38 +164,17 @@ impl ServerInfo {
     }
   }
   
-  pub fn update<'a>(&mut self,headers: HeaderDecoder<'a>) {
-    self.extend_from(headers,false);
+  pub fn update<'a>(&mut self,msg: &[u8]) {
+    self.extend_from(msg,false);
   }
-  pub fn from_decoder<'a>(headers: HeaderDecoder<'a>)->ServerInfo {
+  pub fn from_message<'a>(msg: &[u8])->ServerInfo {
     let mut new: ServerInfo=unsafe{mem::uninitialized()};
-    new.extend_from(headers,true);
+    new.extend_from(msg,true);
     new
   }
   
   pub fn build(&self,config: &Config)->Setup {
     Setup::new(&self,config)
-  }
-}
-
-pub struct HeaderDecoder<'a>(pub &'a [u8]);
-impl<'a> Iterator for HeaderDecoder<'a> {
-  type Item = (&'a [u8],&'a [u8]);
-  fn next(&mut self)->Option<Self::Item> {
-    if self.0.len()==0 {
-      None
-    }else{
-      let mut consume=|len| {
-        let slice=self.0.get(..len).expect("malformed header fields");
-        self.0=&self.0[len..];
-        slice
-      };
-      let key_len: u32=network::decode_from(consume(4)).unwrap();
-      let key=consume(key_len as usize);
-      let val_len: u32=network::decode_from(consume(4)).unwrap();
-      let val=consume(val_len as usize);
-      Some((key,val))
-    }
   }
 }
 

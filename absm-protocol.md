@@ -147,6 +147,20 @@ If any unknown packet is received it should be ignored.
 Apart from these other packet types have currently been defined:
 
 ```
+Touch event 'mmov'
+The main event sent across the network.
+Contains 4 `IEEE 754 binary32`s, representing in order X, Y, pressure and size.
+X and Y are mapped to `[0,0]` at the center of the screen, `[-width/2,-height/2]`
+at the bottom-left corner and `[width/2,height/2]` at the top-right corner.
+Since v1.0
+```
+
+```
+Keypress event 'keyp'
+Contains
+```
+
+```
 Ping request 'ping'
 Upon receiving a ping a 'repl' packet should be sent containing the same data as
 the original ping message.

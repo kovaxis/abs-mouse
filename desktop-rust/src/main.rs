@@ -331,10 +331,9 @@ fn main() {
     println!("usb android device connection is disabled");
   }
   
-  let session=AbsmSession::new(config);
-  
+  let mut session=AbsmSession::new(config);
   loop {
-    
+    session.wait_for_event();
   }
   
   /*
